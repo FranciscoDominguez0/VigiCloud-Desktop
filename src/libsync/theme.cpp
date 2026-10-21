@@ -607,7 +607,8 @@ bool Theme::monoIconsAvailable() const
 
 QString Theme::updateCheckUrl() const
 {
-    return APPLICATION_UPDATE_URL;
+    // VigiCloud: no utilizar el servidor de actualizaciones de Nextcloud.
+    return QString();
 }
 
 qint64 Theme::newBigFolderSizeLimit() const
