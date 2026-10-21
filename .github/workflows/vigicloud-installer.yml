@@ -1,0 +1,159 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# VigiCloud Windows installer based on Nextcloud Desktop v34.0.5 Windows CI.
+name: VigiCloud Windows Installer
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  installer:
+    runs-on: windows-2022
+    timeout-minutes: 360
+    env:
+      CRAFT_TARGET: windows-msvc2022_64-cl
+      CRAFT_MASTER_LOCATION: ${{ github.workspace }}\CraftMaster
+      CRAFT_MASTER_CONFIG: ${{ github.workspace }}\craftmaster.ini
+      PYTHON_VERSION: '3.12'
+    steps:
+      - name: Checkout VigiCloud
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Resolve Craft dependency revisions
+        id: craft-revisions
+        shell: pwsh
+        run: |
+          function configValue($key) {
+            $escapedKey = [regex]::Escape($key)
+            $matches = @(Select-String -Path $env:CRAFT_MASTER_CONFIG -Pattern "^\s*$escapedKey\s*=\s*(.+?)\s*$")
+            if ($matches.Count -ne 1) { throw "Expected one $key value in craftmaster.ini" }
+            return $matches[0].Matches[0].Groups[1].Value.Trim()
+          }
+          function remoteRevision($repository, $ref) {
+            $revision = git ls-remote $repository "refs/heads/$ref"
+            if ($LASTEXITCODE -ne 0 -or !$revision) { throw "Could not resolve $ref from $repository" }
+            return ($revision -split '\s+')[0]
+          }
+          $craftRevision = configValue 'CraftRevision'
+          $kdeRef = configValue 'craft/craft-blueprints-kde.revision'
+          $ncRef = configValue 'craft/craft-blueprints-nextcloud.revision'
+          $kdeSha = remoteRevision 'https://github.com/nextcloud/craft-blueprints-kde.git' $kdeRef
+          $ncSha = remoteRevision 'https://github.com/nextcloud/craft-blueprints-nextcloud.git' $ncRef
+          @("kde_ref=$kdeRef", "nextcloud_ref=$ncRef", "key=$craftRevision-$kdeSha-$ncSha") |
+            Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Restore Craft dependencies
+        id: craft-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ${{ env.CRAFT_MASTER_LOCATION }}
+            ${{ env.CRAFT_MASTER_CONFIG }}
+            ${{ github.workspace }}\craft-clone
+            ${{ github.workspace }}\${{ env.CRAFT_TARGET }}
+          key: ${{ runner.os }}-vigicloud-craft-v1-${{ env.CRAFT_TARGET }}-python-${{ env.PYTHON_VERSION }}-${{ steps.craft-revisions.outputs.key }}
+
+      - name: Install Craft and client dependencies
+        if: steps.craft-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          git clone --depth=1 https://invent.kde.org/packaging/craftmaster.git "$env:CRAFT_MASTER_LOCATION"
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to clone CraftMaster' }
+          function craft {
+            python "$env:CRAFT_MASTER_LOCATION\CraftMaster.py" --config "$env:CRAFT_MASTER_CONFIG" --target "$env:CRAFT_TARGET" -c $args
+            if ($LASTEXITCODE -ne 0) { throw "Craft failed: $args" }
+          }
+          craft --add-blueprint-repository "https://github.com/nextcloud/craft-blueprints-kde.git|${{ steps.craft-revisions.outputs.kde_ref }}|"
+          craft --add-blueprint-repository "https://github.com/nextcloud/craft-blueprints-nextcloud.git|${{ steps.craft-revisions.outputs.nextcloud_ref }}|"
+          craft craft
+          craft --install-deps nextcloud-client
+
+      - name: Save Craft dependencies
+        if: steps.craft-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ env.CRAFT_MASTER_LOCATION }}
+            ${{ env.CRAFT_MASTER_CONFIG }}
+            ${{ github.workspace }}\craft-clone
+            ${{ github.workspace }}\${{ env.CRAFT_TARGET }}
+          key: ${{ runner.os }}-vigicloud-craft-v1-${{ env.CRAFT_TARGET }}-python-${{ env.PYTHON_VERSION }}-${{ steps.craft-revisions.outputs.key }}
+
+      - name: Install Inkscape
+        shell: pwsh
+        run: |
+          choco install inkscape -y --no-progress
+          if ($LASTEXITCODE -ne 0) { throw 'Inkscape installation failed' }
+
+      - name: Verify VigiCloud SVG conversion before compilation
+        shell: pwsh
+        run: |
+          $inkscape = 'C:\Program Files\Inkscape\bin\inkscape.exe'
+          if (!(Test-Path $inkscape)) { $inkscape = (Get-Command inkscape.exe -ErrorAction Stop).Source }
+          $svg = Join-Path $env:GITHUB_WORKSPACE 'theme\colored\VigiCloud-icon.svg'
+          $out = Join-Path $env:RUNNER_TEMP 'vigicloud-icon-check.png'
+          & $inkscape -w 64 -h 64 $svg -o $out
+          if ($LASTEXITCODE -ne 0 -or !(Test-Path $out) -or (Get-Item $out).Length -eq 0) {
+            throw 'VigiCloud SVG could not be converted; compilation not started.'
+          }
+          Write-Host 'VigiCloud icon converted successfully.'
+
+      - name: Set Craft PATH
+        shell: pwsh
+        run: |
+          "$env:GITHUB_WORKSPACE\$env:CRAFT_TARGET\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Compile VigiCloud Desktop
+        shell: pwsh
+        run: |
+          python "$env:CRAFT_MASTER_LOCATION\CraftMaster.py" --config "$env:CRAFT_MASTER_CONFIG" --target "$env:CRAFT_TARGET" -c --src-dir "$env:GITHUB_WORKSPACE" nextcloud-client
+          if ($LASTEXITCODE -ne 0) { throw 'VigiCloud compilation failed' }
+
+      - name: Package Windows installer with NSIS
+        shell: pwsh
+        run: |
+          python "$env:CRAFT_MASTER_LOCATION\CraftMaster.py" --config "$env:CRAFT_MASTER_CONFIG" --target "$env:CRAFT_TARGET" -c --package nextcloud-client
+          if ($LASTEXITCODE -ne 0) { throw 'NSIS packaging failed' }
+
+      - name: Collect generated Windows installers
+        shell: pwsh
+        run: |
+          $target = Join-Path $env:GITHUB_WORKSPACE 'vigicloud-artifacts'
+          New-Item -ItemType Directory -Path $target -Force | Out-Null
+
+          $craftTmp = Join-Path $env:GITHUB_WORKSPACE "$env:CRAFT_TARGET\tmp"
+          if (!(Test-Path $craftTmp)) {
+            throw "Craft package directory not found: $craftTmp"
+          }
+
+          $installers = @(Get-ChildItem -Path $craftTmp -Filter '*.exe' -File -Recurse |
+            Where-Object {
+              $_.Name -match '(?i)(setup|installer)' -and
+              $_.Length -gt 1MB
+            })
+
+          if ($installers.Count -eq 0) {
+            throw "No NSIS installer found in $craftTmp"
+          }
+
+          foreach ($installer in $installers) {
+            Copy-Item $installer.FullName -Destination $target -Force
+            Write-Host "Installer collected: $($installer.FullName)"
+          }
+
+      - name: Upload VigiCloud installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: VigiCloud-Windows-Installer
+          path: vigicloud-artifacts/*.exe
+          if-no-files-found: error
+          retention-days: 14
