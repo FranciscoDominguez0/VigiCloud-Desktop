@@ -123,6 +123,42 @@ jobs:
           python "$env:CRAFT_MASTER_LOCATION\CraftMaster.py" --config "$env:CRAFT_MASTER_CONFIG" --target "$env:CRAFT_TARGET" -c --src-dir "$env:GITHUB_WORKSPACE" nextcloud-client
           if ($LASTEXITCODE -ne 0) { throw 'VigiCloud compilation failed' }
 
+      - name: Adapt Craft packaging for VigiCloud
+        shell: pwsh
+        run: |
+          $blueprint = Join-Path $env:GITHUB_WORKSPACE "$env:CRAFT_TARGET\etc\blueprints\locations\craft-blueprints-nextcloud\nextcloud-client\nextcloud-client.py"
+          if (!(Test-Path $blueprint)) {
+            throw "Nextcloud Craft blueprint not found: $blueprint"
+          }
+
+          $content = Get-Content $blueprint -Raw
+
+          if ($content -notmatch '(?m)^import os$') {
+            $content = $content.Replace("import info", "import os`nimport info")
+          }
+
+          $content = $content.Replace(
+            'self.defines["appname"] = "nextcloud"',
+            'self.defines["appname"] = "VigiCloud"'
+          )
+          $content = $content.Replace(
+            'self.defines["company"] = "Nextcloud GmbH"',
+            'self.defines["company"] = "VigiTec"'
+          )
+          $content = $content.Replace(
+            'self.applicationExecutable = "nextcloud"',
+            'self.applicationExecutable = "vigicloud"'
+          )
+
+          Set-Content -Path $blueprint -Value $content -Encoding utf8
+
+          python -m py_compile $blueprint
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Craft blueprint patch failed'
+          }
+
+          Write-Host 'VigiCloud Craft packaging patch applied.'
+
       - name: Package Windows installer with NSIS
         shell: pwsh
         run: |
