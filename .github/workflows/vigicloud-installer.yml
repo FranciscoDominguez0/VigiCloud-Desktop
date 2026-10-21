@@ -101,9 +101,14 @@ jobs:
           if (!(Test-Path $inkscape)) { $inkscape = (Get-Command inkscape.exe -ErrorAction Stop).Source }
           $svg = Join-Path $env:GITHUB_WORKSPACE 'theme\colored\VigiCloud-icon.svg'
           $out = Join-Path $env:RUNNER_TEMP 'vigicloud-icon-check.png'
-          & $inkscape -w 64 -h 64 $svg -o $out
-          if ($LASTEXITCODE -ne 0 -or !(Test-Path $out) -or (Get-Item $out).Length -eq 0) {
-            throw 'VigiCloud SVG could not be converted; compilation not started.'
+          Write-Host "Inkscape: $inkscape"
+          Write-Host "SVG: $svg"
+          & $inkscape --version
+          & $inkscape -w 64 -h 64 $svg -o $out 2>&1 | Out-Host
+          $conversionExitCode = $LASTEXITCODE
+          Write-Host "Conversion exit code: $conversionExitCode"
+          if ($conversionExitCode -ne 0 -or !(Test-Path $out) -or (Get-Item $out).Length -eq 0) {
+            throw 'VigiCloud SVG conversion failed. Review Inkscape messages above.'
           }
           Write-Host 'VigiCloud icon converted successfully.'
 

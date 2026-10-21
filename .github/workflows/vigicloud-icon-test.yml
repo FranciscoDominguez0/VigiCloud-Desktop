@@ -1,0 +1,38 @@
+name: VigiCloud Icon Test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-icon:
+    runs-on: windows-2022
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Inkscape
+        shell: pwsh
+        run: |
+          choco install inkscape -y --no-progress
+          if ($LASTEXITCODE -ne 0) { throw 'Inkscape installation failed' }
+
+      - name: Test SVG conversion
+        shell: pwsh
+        run: |
+          $inkscape = 'C:\Program Files\Inkscape\bin\inkscape.exe'
+          $svg = Join-Path $env:GITHUB_WORKSPACE 'theme\colored\VigiCloud-icon.svg'
+          $out = Join-Path $env:RUNNER_TEMP 'vigicloud-test.png'
+
+          & $inkscape --version
+          & $inkscape -w 64 -h 64 $svg -o $out 2>&1 | Out-Host
+
+          if ($LASTEXITCODE -ne 0 -or !(Test-Path $out)) {
+            throw 'SVG conversion failed'
+          }
+
+          Write-Host "SUCCESS: VigiCloud SVG converted."
