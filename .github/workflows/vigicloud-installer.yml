@@ -231,16 +231,31 @@ jobs:
             throw "7-Zip not found: $sevenZip"
           }
 
-          $contents = & $sevenZip l $installers[0].FullName 2>&1
+          $inspectDir = Join-Path $env:RUNNER_TEMP 'vigicloud-inspect'
+          New-Item -ItemType Directory -Path $inspectDir -Force | Out-Null
+
+          & $sevenZip e $installers[0].FullName "-o$inspectDir" -y "*.7z"
           if ($LASTEXITCODE -ne 0) {
-            throw "Cannot inspect generated installer."
+            throw 'Could not extract the installer payload.'
+          }
+
+          $payloads = @(Get-ChildItem $inspectDir -Filter '*.7z' -File)
+          if ($payloads.Count -ne 1) {
+            throw "Expected one embedded 7z payload, found $($payloads.Count)."
+          }
+
+          $contents = & $sevenZip l $payloads[0].FullName
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Could not inspect the embedded installer payload.'
           }
 
           $contents | Select-String 'vigicloud|nextcloud|craft.ico'
 
-          if (-not ($contents | Select-String -Pattern '(?i)vigicloud\.exe')) {
-            throw "Installer does not contain vigicloud.exe. Artifact upload cancelled."
+          if (-not ($contents | Select-String -Pattern '(?i)(^|[\\/])vigicloud\.exe(\s|$)')) {
+            throw 'Embedded installer payload does not contain vigicloud.exe.'
           }
+
+          Write-Host 'SUCCESS: vigicloud.exe exists inside installer payload.'
 
           Copy-Item $installers[0].FullName -Destination $target -Force
           Write-Host "Installer collected: $($installers[0].FullName)"
