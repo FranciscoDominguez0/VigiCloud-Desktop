@@ -175,6 +175,23 @@ jobs:
             throw "Craft blueprint does not configure VigiCloud as display name."
           }
 
+          $blacklist = Join-Path (Split-Path $blueprint) 'blacklist.txt'
+          if (!(Test-Path $blacklist)) {
+            throw "Craft blacklist not found: $blacklist"
+          }
+
+          $rules = Get-Content $blacklist -Raw
+          $oldRule = 'bin/(?!(nextcloud|nextcloudcmd|QtWebEngineProcess)).*\.exe'
+          $newRule = 'bin/(?!(vigicloud|vigicloudcmd|nextcloud|nextcloudcmd|QtWebEngineProcess)).*\.exe'
+
+          if (!$rules.Contains($oldRule)) {
+            throw 'Expected Craft executable blacklist rule not found.'
+          }
+
+          $rules = $rules.Replace($oldRule, $newRule)
+          Set-Content -Path $blacklist -Value $rules -Encoding utf8
+          Write-Host 'Craft blacklist updated to preserve vigicloud.exe.'
+
           Set-Content -Path $blueprint -Value $content -Encoding utf8
 
           python -m py_compile $blueprint
