@@ -171,25 +171,38 @@ jobs:
           $target = Join-Path $env:GITHUB_WORKSPACE 'vigicloud-artifacts'
           New-Item -ItemType Directory -Path $target -Force | Out-Null
 
-          $craftTmp = Join-Path $env:GITHUB_WORKSPACE "$env:CRAFT_TARGET\tmp"
-          if (!(Test-Path $craftTmp)) {
-            throw "Craft package directory not found: $craftTmp"
+          $roots = @(
+            (Join-Path $env:GITHUB_WORKSPACE "$env:CRAFT_TARGET\tmp"),
+            'D:\_'
+          )
+
+          $files = @(
+            foreach ($root in $roots) {
+              if (Test-Path $root) {
+                Get-ChildItem $root -Filter '*.exe' -File -Recurse -ErrorAction SilentlyContinue |
+                  Where-Object { $_.Length -gt 10MB }
+              }
+            }
+          )
+
+          Write-Host '=== EXECUTABLES FOUND ==='
+          $files | ForEach-Object {
+            Write-Host "$($_.Length) bytes - $($_.FullName)"
           }
 
-          $installers = @(Get-ChildItem -Path $craftTmp -Filter '*.exe' -File -Recurse |
-            Where-Object {
-              $_.Name -match '(?i)(setup|installer)' -and
-              $_.Length -gt 1MB
-            })
+          $installers = @(
+            $files | Where-Object {
+              $_.FullName -notmatch '\\bin\\|\\dev-utils\\|\\image-' -and
+              $_.Name -match '(?i)vigi|nextcloud|setup|installer'
+            } | Sort-Object FullName -Unique
+          )
 
-          if ($installers.Count -eq 0) {
-            throw "No NSIS installer found in $craftTmp"
+          if ($installers.Count -ne 1) {
+            throw "Expected one installer; found $($installers.Count). Review paths above."
           }
 
-          foreach ($installer in $installers) {
-            Copy-Item $installer.FullName -Destination $target -Force
-            Write-Host "Installer collected: $($installer.FullName)"
-          }
+          Copy-Item $installers[0].FullName -Destination $target -Force
+          Write-Host "Installer collected: $($installers[0].FullName)"
 
       - name: Upload VigiCloud installer
         uses: actions/upload-artifact@v4
