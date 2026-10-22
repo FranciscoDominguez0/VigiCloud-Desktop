@@ -123,6 +123,19 @@ jobs:
           python "$env:CRAFT_MASTER_LOCATION\CraftMaster.py" --config "$env:CRAFT_MASTER_CONFIG" --target "$env:CRAFT_TARGET" -c --src-dir "$env:GITHUB_WORKSPACE" nextcloud-client
           if ($LASTEXITCODE -ne 0) { throw 'VigiCloud compilation failed' }
 
+      - name: Verify compiled VigiCloud executable
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE "$env:CRAFT_TARGET\bin\vigicloud.exe"
+          if (!(Test-Path $exe)) {
+            Write-Host "EXE files in Craft bin:"
+            Get-ChildItem (Join-Path $env:GITHUB_WORKSPACE "$env:CRAFT_TARGET\bin") -Filter '*.exe' |
+              Select-Object Name,Length,FullName | Format-Table -AutoSize
+            throw "vigicloud.exe was not installed by CMake."
+          }
+          Write-Host "VigiCloud executable found: $exe"
+          Write-Host "Size: $((Get-Item $exe).Length) bytes"
+
       - name: Adapt Craft packaging for VigiCloud
         shell: pwsh
         run: |
@@ -149,6 +162,18 @@ jobs:
             'self.applicationExecutable = "nextcloud"',
             'self.applicationExecutable = "vigicloud"'
           )
+
+          $content = $content.Replace(
+            'self.displayName = "Nextcloud"',
+            'self.displayName = "VigiCloud"'
+          )
+
+          if ($content -notmatch 'self\.applicationExecutable\s*=\s*"vigicloud"') {
+            throw "Craft blueprint does not configure vigicloud as executable."
+          }
+          if ($content -notmatch 'self\.displayName\s*=\s*"VigiCloud"') {
+            throw "Craft blueprint does not configure VigiCloud as display name."
+          }
 
           Set-Content -Path $blueprint -Value $content -Encoding utf8
 
@@ -199,6 +224,22 @@ jobs:
 
           if ($installers.Count -ne 1) {
             throw "Expected one installer; found $($installers.Count). Review paths above."
+          }
+
+          $sevenZip = 'C:\Program Files\7-Zip\7z.exe'
+          if (!(Test-Path $sevenZip)) {
+            throw "7-Zip not found: $sevenZip"
+          }
+
+          $contents = & $sevenZip l $installers[0].FullName 2>&1
+          if ($LASTEXITCODE -ne 0) {
+            throw "Cannot inspect generated installer."
+          }
+
+          $contents | Select-String 'vigicloud|nextcloud|craft.ico'
+
+          if (-not ($contents | Select-String -Pattern '(?i)vigicloud\.exe')) {
+            throw "Installer does not contain vigicloud.exe. Artifact upload cancelled."
           }
 
           Copy-Item $installers[0].FullName -Destination $target -Force
